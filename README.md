@@ -16,4 +16,4 @@ mvn clean package -DskipTests
 
 2. maven 版本太低
 brew update
-brew upgrade maven
+brew upgrade maven# hify
