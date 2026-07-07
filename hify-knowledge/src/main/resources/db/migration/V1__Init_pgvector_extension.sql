@@ -9,20 +9,32 @@ CREATE EXTENSION IF NOT EXISTS vector;
 -- BGE-large-zh-v1.5 produces 768-dimensional vectors
 CREATE TABLE IF NOT EXISTS chunk (
     id BIGSERIAL PRIMARY KEY,
-    document_id BIGINT NOT NULL REFERENCES document(id) ON DELETE CASCADE,
+    document_id BIGINT NOT NULL,                 -- References document(id) in MySQL (cross-DB)
     chunk_index INTEGER NOT NULL,
     content TEXT NOT NULL,
     token_count INTEGER,
     embedding vector(768) NOT NULL,              -- BGE 768-dimensional vector
-    created_by VARCHAR(64) DEFAULT NULL,
-    updated_by VARCHAR(64) DEFAULT NULL,
-    create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     deleted SMALLINT DEFAULT 0,                  -- Soft delete flag (0=active, 1=deleted)
     
     -- Constraints
     CONSTRAINT chunk_document_index_unique UNIQUE(document_id, chunk_index)
 );
+
+-- Create trigger to auto-update updated_at timestamp (PostgreSQL equivalent of MySQL ON UPDATE)
+CREATE OR REPLACE FUNCTION update_chunk_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trigger_chunk_updated_at
+BEFORE UPDATE ON chunk
+FOR EACH ROW
+EXECUTE FUNCTION update_chunk_updated_at();
 
 -- Create indexes for query optimization
 
@@ -48,7 +60,7 @@ CREATE INDEX IF NOT EXISTS idx_chunk_document_deleted ON chunk(document_id, dele
 -- Table comments for documentation
 COMMENT ON TABLE chunk IS 'Vector-stored text chunks from documents, used for RAG retrieval with BGE embeddings';
 COMMENT ON COLUMN chunk.id IS 'Primary key identifier';
-COMMENT ON COLUMN chunk.document_id IS 'Foreign key reference to parent document';
+COMMENT ON COLUMN chunk.document_id IS 'Foreign key reference to parent document (cross-database, managed by application)';
 COMMENT ON COLUMN chunk.chunk_index IS 'Sequential index of chunk within document (0-based)';
 COMMENT ON COLUMN chunk.content IS 'Original text content of the chunk';
 COMMENT ON COLUMN chunk.token_count IS 'Token count for the chunk content (used for billing/limits)';

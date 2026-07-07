@@ -11,12 +11,9 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import javax.sql.DataSource;
 
 /**
- * PostgreSQL / pgvector 独立数据源配置。
- * <p>
- * 属性前缀使用 "pgvector.datasource"（不在 "spring." 下），
- * 使 Spring Boot DataSourceAutoConfiguration 完全感知不到此数据源，
- * MyBatis-Plus 主数据源（MySQL）由 Spring Boot 自动配置正常管理。
- * 只暴露 pgJdbcTemplate，供 ChunkRepository 使用。
+ * PostgreSQL / pgvector 独立数据源。
+ * prefix 使用 "pgvector.datasource"（不在 spring.* 下），
+ * 避免 Spring Boot DataSourceAutoConfiguration 把它当主数据源。
  */
 @Configuration
 public class PgVectorDataSourceConfig {

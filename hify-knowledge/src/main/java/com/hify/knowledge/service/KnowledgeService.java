@@ -20,6 +20,9 @@ public interface KnowledgeService {
     List<ChunkVO> getChunks(Long documentId);
     void deleteDocument(Long id);
 
-    /** RAG 检索：从知识库中找与 query 最相关的 topK 个 chunk（mock 实现直接返回前 topK 条） */
+    /** RAG 检索：从知识库中找与 query 最相关的 topK 个 chunk */
     List<ChunkVO> searchChunks(Long knowledgeBaseId, String query, int topK);
+
+    /** 重新触发文档向量化（用于 PG chunk 数据丢失时恢复） */
+    DocumentVO reprocessDocument(Long id);
 }

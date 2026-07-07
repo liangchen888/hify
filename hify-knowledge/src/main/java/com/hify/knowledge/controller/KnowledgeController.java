@@ -80,4 +80,10 @@ public class KnowledgeController {
         knowledgeService.deleteDocument(id);
         return Result.ok();
     }
+
+    /** 重新触发文档向量化，用于 PG chunk 数据丢失时恢复 */
+    @PostMapping("/api/v1/documents/{id}/reprocess")
+    public Result<DocumentVO> reprocessDocument(@PathVariable Long id) {
+        return Result.ok(knowledgeService.reprocessDocument(id));
+    }
 }

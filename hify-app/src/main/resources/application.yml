@@ -41,12 +41,25 @@ spring:
           max-idle: 8
           max-wait: -1ms
 
-  pgvector:
-    host: ${PGVECTOR_HOST:}
-    port: ${PGVECTOR_PORT:5432}
-    database: ${PGVECTOR_DB:hify}
-    username: ${PGVECTOR_USERNAME:}
-    password: ${PGVECTOR_PASSWORD:}
+  # PostgreSQL pgvector — 独立数据源，prefix 不在 spring.* 下避免被当主库
+pgvector:
+  datasource:
+    jdbc-url: jdbc:postgresql://localhost:5432/ragdb
+    username: postgres
+    password: postgres
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      minimum-idle: 2
+      maximum-pool-size: 10
+      connection-timeout: 20000
+      idle-timeout: 300000
+      max-lifetime: 900000
+
+embedding:
+  bge:
+    endpoint: ${BGE_ENDPOINT:http://localhost:11434/v1/embeddings}
+    api-key: ${BGE_API_KEY:}
+    model: ${BGE_MODEL:nomic-embed-text}
 
 resilience4j:
   circuitbreaker:

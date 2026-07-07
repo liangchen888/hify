@@ -1,55 +1,60 @@
 package com.hify.knowledge.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.hify.common.dto.PageResult;
 import com.hify.common.dto.Result;
 import com.hify.common.exception.BizException;
 import com.hify.common.exception.ErrorCode;
 import com.hify.knowledge.dto.*;
+import com.hify.knowledge.entity.Chunk;
 import com.hify.knowledge.entity.Document;
 import com.hify.knowledge.entity.KnowledgeBase;
 import com.hify.knowledge.mapper.DocumentMapper;
 import com.hify.knowledge.mapper.KnowledgeBaseMapper;
+import com.hify.knowledge.pgmapper.ChunkRepository;
+import com.hify.knowledge.service.EmbeddingService;
 import com.hify.knowledge.service.KnowledgeService;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
+import com.pgvector.PGvector;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.stream.Collectors;
 
-@Slf4j
 @Service
 public class KnowledgeServiceImpl implements KnowledgeService {
 
+    private static final Logger log = LoggerFactory.getLogger(KnowledgeServiceImpl.class);
+
     private final KnowledgeBaseMapper kbMapper;
     private final DocumentMapper documentMapper;
+    private final ChunkRepository chunkRepository;
+    private final EmbeddingService embeddingService;
     private final Executor asyncExecutor;
 
-    // Mock chunk 存储（替代 pgvector）
-    private static final ConcurrentHashMap<Long, List<ChunkVO>> MOCK_CHUNKS = new ConcurrentHashMap<>();
-    // 暂存原始文件内容，processDocument 后清除
     private static final ConcurrentHashMap<Long, String> DOC_RAW_TEXT = new ConcurrentHashMap<>();
     private static final List<String> ALLOWED_TYPES = Arrays.asList("txt", "md", "pdf");
-    private static final long MAX_SIZE = 10 * 1024 * 1024L; // 10MB
+    private static final long MAX_SIZE = 10 * 1024 * 1024L;
 
     public KnowledgeServiceImpl(KnowledgeBaseMapper kbMapper,
                                 DocumentMapper documentMapper,
+                                ChunkRepository chunkRepository,
+                                EmbeddingService embeddingService,
                                 @Qualifier("asyncExecutor") Executor asyncExecutor) {
         this.kbMapper = kbMapper;
         this.documentMapper = documentMapper;
+        this.chunkRepository = chunkRepository;
+        this.embeddingService = embeddingService;
         this.asyncExecutor = asyncExecutor;
     }
 
@@ -96,11 +101,10 @@ public class KnowledgeServiceImpl implements KnowledgeService {
     @Transactional
     public void deleteKb(Long id) {
         getKbOrThrow(id);
-        // 逻辑删除下属文档
         List<Document> docs = documentMapper.selectList(
             new LambdaQueryWrapper<Document>().eq(Document::getKnowledgeBaseId, id));
         for (Document doc : docs) {
-            MOCK_CHUNKS.remove(doc.getId());
+            chunkRepository.deleteByDocumentId(doc.getId());
             documentMapper.deleteById(doc.getId());
         }
         kbMapper.deleteById(id);
@@ -111,33 +115,24 @@ public class KnowledgeServiceImpl implements KnowledgeService {
     @Override
     public DocumentVO uploadDocument(Long kbId, MultipartFile file) {
         getKbOrThrow(kbId);
-
-        // 校验文件类型
         String originalName = file.getOriginalFilename() != null ? file.getOriginalFilename() : "file";
         String ext = originalName.contains(".")
-            ? originalName.substring(originalName.lastIndexOf('.') + 1).toLowerCase()
-            : "";
-        if (!ALLOWED_TYPES.contains(ext)) {
-            throw new BizException(ErrorCode.PARAM_ERROR);
-        }
-        if (file.getSize() > MAX_SIZE) {
-            throw new BizException(ErrorCode.PARAM_ERROR);
-        }
+            ? originalName.substring(originalName.lastIndexOf('.') + 1).toLowerCase() : "";
+        if (!ALLOWED_TYPES.contains(ext)) throw new BizException(ErrorCode.PARAM_ERROR);
+        if (file.getSize() > MAX_SIZE) throw new BizException(ErrorCode.PARAM_ERROR);
 
-        // 读取文件内容（txt/md 直接读文本，pdf 降级为文件名占位）
         String rawText = "";
         try {
             if ("txt".equals(ext) || "md".equals(ext)) {
                 rawText = new String(file.getBytes(), java.nio.charset.StandardCharsets.UTF_8);
             } else {
-                rawText = "[PDF 文件：" + originalName + "，Mock 模式暂不解析 PDF 内容]";
+                rawText = "[PDF 文件：" + originalName + "，暂不支持PDF解析]";
             }
         } catch (IOException e) {
             log.warn("读取文件内容失败: {}", e.getMessage());
         }
         final String rawTextFinal = rawText;
 
-        // 写 document 记录
         Document doc = new Document();
         doc.setKnowledgeBaseId(kbId);
         doc.setName(originalName);
@@ -149,11 +144,8 @@ public class KnowledgeServiceImpl implements KnowledgeService {
         documentMapper.insert(doc);
 
         Long docId = doc.getId();
-        if (!rawTextFinal.isBlank()) {
-            DOC_RAW_TEXT.put(docId, rawTextFinal);
-        }
+        if (!rawTextFinal.isBlank()) DOC_RAW_TEXT.put(docId, rawTextFinal);
         asyncExecutor.execute(() -> processDocument(docId));
-
         return DocumentVO.from(doc);
     }
 
@@ -181,7 +173,8 @@ public class KnowledgeServiceImpl implements KnowledgeService {
     public List<ChunkVO> getChunks(Long documentId) {
         Document doc = documentMapper.selectById(documentId);
         if (doc == null) throw new BizException(ErrorCode.DOCUMENT_NOT_FOUND);
-        return MOCK_CHUNKS.getOrDefault(documentId, List.of());
+        return chunkRepository.selectByDocumentId(documentId).stream()
+            .map(ChunkVO::from).collect(Collectors.toList());
     }
 
     @Override
@@ -189,92 +182,178 @@ public class KnowledgeServiceImpl implements KnowledgeService {
     public void deleteDocument(Long id) {
         Document doc = documentMapper.selectById(id);
         if (doc == null) throw new BizException(ErrorCode.DOCUMENT_NOT_FOUND);
-        MOCK_CHUNKS.remove(id);
+        chunkRepository.deleteByDocumentId(id);
         documentMapper.deleteById(id);
     }
 
-    // ── RAG 检索（Mock）──────────────────────────────────────
+    /**
+     * 重新处理已有文档（重新向量化并写入 PG）。
+     * 用于 PG chunk 数据丢失时的恢复。
+     */
+    @Override
+    public DocumentVO reprocessDocument(Long id) {
+        Document doc = documentMapper.selectById(id);
+        if (doc == null) throw new BizException(ErrorCode.DOCUMENT_NOT_FOUND);
+        // 清除 PG 里旧的 chunk
+        chunkRepository.deleteByDocumentId(id);
+        // 重置状态
+        doc.setStatus("PENDING");
+        doc.setChunkCount(0);
+        doc.setErrorMessage("");
+        documentMapper.updateById(doc);
+        // 异步触发处理（需要原始文件内容，从 document name 做占位或重新读文件）
+        asyncExecutor.execute(() -> processDocumentByName(id, doc.getName(), doc.getFileType()));
+        return DocumentVO.from(doc);
+    }
+
+    // ── RAG 向量检索 ─────────────────────────────────────────
+
+    /** 从 MySQL 查出该知识库所有 DONE 文档的 ID，避免跨库 JOIN */
+    private List<Long> getDoneDocumentIds(Long knowledgeBaseId) {
+        return documentMapper.selectList(
+            new LambdaQueryWrapper<Document>()
+                .eq(Document::getKnowledgeBaseId, knowledgeBaseId)
+                .eq(Document::getStatus, "DONE")
+        ).stream().map(Document::getId).collect(Collectors.toList());
+    }
 
     @Override
     public List<ChunkVO> searchChunks(Long knowledgeBaseId, String query, int topK) {
-        // Mock 实现：收集该知识库下所有 DONE 文档的 chunk，取前 topK 条返回
-        // 真实实现应调用 Embedding API + pgvector 相似度查询
-        List<Document> docs = documentMapper.selectList(
-            new LambdaQueryWrapper<Document>()
-                .eq(Document::getKnowledgeBaseId, knowledgeBaseId)
-                .eq(Document::getStatus, "DONE"));
-
-        List<ChunkVO> all = new ArrayList<>();
-        for (Document doc : docs) {
-            List<ChunkVO> chunks = MOCK_CHUNKS.getOrDefault(doc.getId(), List.of());
-            all.addAll(chunks);
+        try {
+            List<Long> docIds = getDoneDocumentIds(knowledgeBaseId);
+            if (docIds.isEmpty()) {
+                log.warn("知识库 {} 下没有已完成的文档", knowledgeBaseId);
+                return new ArrayList<>();
+            }
+            PGvector queryVector = embeddingService.embed(query);
+            if (queryVector == null) {
+                log.warn("查询文本向量化失败: {}", query);
+                return new ArrayList<>();
+            }
+            List<Chunk> chunks = chunkRepository.searchByVector(docIds, queryVector, topK);
+            List<ChunkVO> result = chunks.stream().map(ChunkVO::from).collect(Collectors.toList());
+            log.info("RAG向量检索完成 kbId={} docCount={} query='{}' 命中 {} 条",
+                knowledgeBaseId, docIds.size(), query, result.size());
+            return result;
+        } catch (Exception e) {
+            log.error("RAG检索失败 kbId={} query='{}'", knowledgeBaseId, query, e);
+            return new ArrayList<>();
         }
-
-        // Mock 相似度：随机打乱后取前 topK（真实场景是按向量余弦距离排序）
-        java.util.Collections.shuffle(all, new Random(query.hashCode()));
-        List<ChunkVO> result = all.stream().limit(topK).toList();
-        log.info("RAG mock 检索 kbId={} query='{}' 命中 {}/{} 条", knowledgeBaseId, query, result.size(), all.size());
-        return result;
     }
 
-    // ── 管线处理（Mock）──────────────────────────────────────
+    // ── 文档处理管线 ─────────────────────────────────────────
 
     private void processDocument(Long documentId) {
         Document doc = documentMapper.selectById(documentId);
         if (doc == null) return;
         try {
-            // step1: PROCESSING
             doc.setStatus("PROCESSING");
             documentMapper.updateById(doc);
+            log.info("开始处理文档 docId={}, 文件名={}", documentId, doc.getName());
 
-            // step2: 模拟处理耗时
-            Thread.sleep(2000 + new Random().nextInt(2000));
-
-            // step3: 生成 chunks（优先用真实文件内容，按段落/换行切割）
             String rawText = DOC_RAW_TEXT.remove(documentId);
-            List<ChunkVO> chunks = new ArrayList<>();
-            if (rawText != null && !rawText.isBlank()) {
-                // 按段落切割（连续空行）
-                String[] paragraphs = rawText.split("\\n{2,}");
-                for (int i = 0; i < paragraphs.length; i++) {
-                    String para = paragraphs[i].trim();
-                    if (para.isBlank()) continue;
-                    ChunkVO c = new ChunkVO();
-                    c.setId((long) (documentId * 1000 + i));
-                    c.setDocumentId(documentId);
-                    c.setChunkIndex(i);
-                    c.setContent(para);
-                    c.setTokenCount(para.length() / 2 + 1);
-                    chunks.add(c);
-                }
+            if (rawText == null || rawText.isBlank()) {
+                log.warn("文档文本为空 docId={}", documentId);
+                doc.setStatus("DONE");
+                doc.setChunkCount(0);
+                documentMapper.updateById(doc);
+                return;
             }
-            // 如果没有内容（如 PDF 占位），生成一条说明
-            if (chunks.isEmpty()) {
-                ChunkVO c = new ChunkVO();
-                c.setId(documentId * 1000);
-                c.setDocumentId(documentId);
-                c.setChunkIndex(0);
-                c.setContent(String.format("【%s】（Mock 模式：文档内容未能解析）", doc.getName()));
-                c.setTokenCount(20);
-                chunks.add(c);
-            }
-            int chunkCount = chunks.size();
-            MOCK_CHUNKS.put(documentId, chunks);
 
-            // step4: 更新状态
-            doc.setChunkCount(chunkCount);
+            List<String> chunkTexts = splitIntoChunks(rawText);
+            if (chunkTexts.isEmpty()) {
+                doc.setStatus("DONE");
+                doc.setChunkCount(0);
+                documentMapper.updateById(doc);
+                return;
+            }
+            log.info("文本分块完成 docId={}, chunks={}", documentId, chunkTexts.size());
+
+            List<PGvector> embeddings = embeddingService.embedBatch(chunkTexts);
+            if (embeddings.size() != chunkTexts.size()) {
+                throw new RuntimeException("向量化数量不匹配 期望=" + chunkTexts.size() + " 实际=" + embeddings.size());
+            }
+            log.info("向量化完成 docId={}, embeddings={}", documentId, embeddings.size());
+
+            for (int i = 0; i < chunkTexts.size(); i++) {
+                Chunk chunk = new Chunk();
+                chunk.setDocumentId(documentId);
+                chunk.setChunkIndex(i);
+                chunk.setContent(chunkTexts.get(i));
+                chunk.setTokenCount(estimateTokenCount(chunkTexts.get(i)));
+                chunk.setEmbedding(embeddings.get(i));
+                chunkRepository.insert(chunk);
+            }
+            log.info("chunks保存完成 docId={}, 数量={}", documentId, chunkTexts.size());
+
+            doc.setChunkCount(chunkTexts.size());
             doc.setStatus("DONE");
+            doc.setErrorMessage("");
             documentMapper.updateById(doc);
+            log.info("文档处理完成 docId={}", documentId);
 
-            log.info("文档处理完成 docId={}, chunks={}", documentId, chunkCount);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
         } catch (Exception e) {
             log.error("文档处理失败 docId={}", documentId, e);
             doc.setStatus("FAILED");
-            doc.setErrorMessage(e.getMessage() != null ? e.getMessage() : "处理失败");
+            String errMsg = e.getMessage() != null ? e.getMessage() : "处理失败";
+            doc.setErrorMessage(errMsg.length() > 500 ? errMsg.substring(0, 500) : errMsg);
             documentMapper.updateById(doc);
         }
+    }
+
+    /**
+     * reprocessDocument 使用：通过文档名生成占位文本触发 BGE 向量化，
+     * 主要用于原始文件内容不在内存时的降级处理。
+     * 真实场景建议重新上传文件。
+     */
+    private void processDocumentByName(Long documentId, String name, String fileType) {
+        Document doc = documentMapper.selectById(documentId);
+        if (doc == null) return;
+        try {
+            doc.setStatus("PROCESSING");
+            documentMapper.updateById(doc);
+            // 原始内容已不在内存，生成占位提示
+            String placeholder = "【" + name + "】（原始内容已不在内存，请重新上传文件以恢复向量化）";
+            List<String> texts = List.of(placeholder);
+            List<PGvector> embeddings = embeddingService.embedBatch(texts);
+            Chunk chunk = new Chunk();
+            chunk.setDocumentId(documentId);
+            chunk.setChunkIndex(0);
+            chunk.setContent(placeholder);
+            chunk.setTokenCount(estimateTokenCount(placeholder));
+            chunk.setEmbedding(embeddings.get(0));
+            chunkRepository.insert(chunk);
+            doc.setChunkCount(1);
+            doc.setStatus("DONE");
+            doc.setErrorMessage("原始内容不在内存，已生成占位chunk，建议重新上传");
+            documentMapper.updateById(doc);
+        } catch (Exception e) {
+            log.error("reprocess失败 docId={}", documentId, e);
+            doc.setStatus("FAILED");
+            String errMsg = e.getMessage() != null ? e.getMessage() : "处理失败";
+            doc.setErrorMessage(errMsg.length() > 500 ? errMsg.substring(0, 500) : errMsg);
+            documentMapper.updateById(doc);
+        }
+    }
+
+    private List<String> splitIntoChunks(String text) {
+        List<String> chunks = new ArrayList<>();
+        String[] paragraphs = text.split("\\n{2,}");
+        for (String para : paragraphs) {
+            String trimmed = para.trim();
+            if (!trimmed.isBlank()) chunks.add(trimmed);
+        }
+        return chunks.isEmpty() ? List.of(text.trim()) : chunks;
+    }
+
+    private int estimateTokenCount(String text) {
+        int count = 0;
+        for (char c : text.toCharArray()) {
+            if (c >= 0x4E00 && c <= 0x9FFF) count += 1;
+            else if (c == ' ' || c == '\n' || c == '\t') count += 1;
+            else count += (int) 0.25;
+        }
+        return Math.max(1, count);
     }
 
     private KnowledgeBase getKbOrThrow(Long id) {
