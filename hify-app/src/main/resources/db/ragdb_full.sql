@@ -1,4 +1,5 @@
 --
+--  启动连接   PostgreSQL  docker exec -it pg-rag psql -U postgres -d ragdb
 -- PostgreSQL database dump
 --
 
