@@ -56,7 +56,7 @@ export function streamMessage(
 
   ;(async () => {
     try {
-      const resp = await fetch(`/api/v1/chat/sessions/${sessionId}/messages`, {
+      const resp = await fetch(`/api/v1/chat/sessions/${sessionId}/messages/stream`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

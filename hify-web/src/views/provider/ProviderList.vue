@@ -71,6 +71,11 @@
         <template #action="{ row }">
           <el-button type="primary" link size="small" @click="dialogRef?.open(row)">编辑</el-button>
           <el-button
+            type="success" link size="small"
+            style="margin-left: 4px;"
+            @click="openModelDialog(row)"
+          >模型</el-button>
+          <el-button
             type="warning" link size="small"
             style="margin-left: 4px;"
             :loading="testingId === row.id"
@@ -103,20 +108,124 @@
           <el-input v-model="form.apiKey" type="password" placeholder="留空表示不修改" show-password />
         </el-form-item>
         <el-form-item label="Base URL" prop="baseUrl">
-          <el-input v-model="form.baseUrl" placeholder="https://api.openai.com/v1" />
+          <el-input v-model="form.baseUrl" placeholder="https://api.openai.com" />
         </el-form-item>
         <el-form-item label="描述">
           <el-input v-model="form.description" placeholder="可选" />
         </el-form-item>
       </template>
     </HifyFormDialog>
+
+    <!-- 模型管理弹窗 -->
+    <el-dialog
+      v-model="modelDialogVisible"
+      :title="`模型管理 - ${currentProvider?.name}`"
+      width="680px"
+      :close-on-click-modal="false"
+      destroy-on-close
+    >
+      <div style="margin-bottom: 12px; text-align: right;">
+        <el-button type="primary" size="small" @click="openAddModel">
+          <el-icon><Plus /></el-icon>
+          添加模型
+        </el-button>
+      </div>
+      <el-table :data="modelList" size="small" border style="width: 100%">
+        <el-table-column prop="name" label="名称" min-width="120" />
+        <el-table-column prop="modelId" label="模型 ID" min-width="160" />
+        <el-table-column prop="contextSize" label="上下文 Token" width="120" />
+        <el-table-column label="状态" width="80">
+          <template #default="{ row }">
+            <el-tag :type="row.enabled === 1 ? 'success' : 'info'" size="small">
+              {{ row.enabled === 1 ? '启用' : '禁用' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="130">
+          <template #default="{ row }">
+            <el-button type="primary" link size="small" @click="openEditModel(row)">编辑</el-button>
+            <el-button type="danger" link size="small" style="margin-left:4px" @click="onDeleteModel(row)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <div v-if="modelList.length === 0" style="text-align:center;padding:20px;color:#999">
+        暂无模型配置，点击「添加模型」开始
+      </div>
+    </el-dialog>
+
+    <!-- 新增/编辑模型弹窗 -->
+    <el-dialog
+      v-model="modelFormVisible"
+      :title="modelFormMode === 'add' ? '添加模型' : '编辑模型'"
+      width="480px"
+      :close-on-click-modal="false"
+      destroy-on-close
+      @closed="resetModelForm"
+    >
+      <el-form
+        ref="modelFormRef"
+        :model="modelForm"
+        :rules="modelFormRules"
+        label-width="110px"
+        style="margin-top: 8px"
+        @submit.prevent
+      >
+        <el-form-item v-if="modelFormMode === 'add' && remoteModelOptions.length > 0" label="从远程选择">
+          <el-select
+            placeholder="选择已发现的模型（可选）"
+            style="width: 100%"
+            :loading="fetchingRemote"
+            clearable
+            filterable
+            @change="onRemoteModelSelect"
+          >
+            <el-option
+              v-for="id in remoteModelOptions"
+              :key="id"
+              :label="id"
+              :value="id"
+            />
+          </el-select>
+          <div style="font-size:12px;color:#999;margin-top:4px">选择后自动填入下方字段，仍可手动修改</div>
+        </el-form-item>
+        <el-form-item v-if="modelFormMode === 'add' && fetchingRemote" label="远程模型">
+          <span style="font-size:12px;color:#999">正在拉取远程模型列表...</span>
+        </el-form-item>
+        <el-form-item label="模型名称" prop="name">
+          <el-input v-model="modelForm.name" placeholder="如 GPT-4o" />
+        </el-form-item>
+        <el-form-item label="模型 ID" prop="modelId">
+          <el-input v-model="modelForm.modelId" placeholder="如 gpt-4o" />
+          <div style="font-size:12px;color:#999;margin-top:4px">调用 API 时实际传递的标识</div>
+        </el-form-item>
+        <el-form-item label="上下文大小" prop="contextSize">
+          <el-input-number v-model="modelForm.contextSize" :min="1" :max="2000000" :step="1024" style="width:180px" />
+          <span style="margin-left:8px;font-size:12px;color:#999">Token</span>
+        </el-form-item>
+        <el-form-item v-if="modelFormMode === 'edit'" label="状态">
+          <el-switch
+            v-model="modelForm.enabled"
+            :active-value="1"
+            :inactive-value="0"
+            active-text="启用"
+            inactive-text="禁用"
+          />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="modelFormVisible = false">取消</el-button>
+        <el-button type="primary" :loading="modelSubmitting" @click="onModelSubmit">
+          {{ modelFormMode === 'add' ? '确认' : '保存' }}
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { ElMessage } from 'element-plus'
-import type { FormRules } from 'element-plus'
+import type { FormInstance, FormRules } from 'element-plus'
 import { Plus } from '@element-plus/icons-vue'
 import HifyTable from '@/components/base/HifyTable.vue'
 import HifyFormDialog from '@/components/base/HifyFormDialog.vue'
@@ -129,8 +238,13 @@ import {
   updateProvider,
   deleteProvider,
   testConnection,
+  listModels,
+  addModel,
+  updateModel,
+  deleteModel,
+  fetchRemoteModels,
 } from '@/api/provider'
-import type { ProviderVO, HealthStatus } from '@/api/provider'
+import type { ProviderVO, HealthStatus, ModelConfig } from '@/api/provider'
 
 const providerTypes = [
   { label: 'OpenAI',            value: 'OPENAI' },
@@ -224,6 +338,8 @@ const onDelete = async (row: ProviderVO) => {
 
 // ── 连通性测试 ─────────────────────────────────────────────
 const testingId = ref<number | null>(null)
+// 缓存每个 provider 测试时拉到的远程模型列表  providerId → modelId[]
+const remoteModelsCache = ref<Record<number, string[]>>({})
 
 const onTestConnection = async (row: ProviderVO) => {
   testingId.value = row.id
@@ -231,12 +347,142 @@ const onTestConnection = async (row: ProviderVO) => {
     const result = await testConnection(row.id)
     if (result.success) {
       ElMessage.success(`连接成功，延迟 ${result.latencyMs}ms，发现 ${result.modelCount} 个模型`)
+      // 顺便拉取模型列表缓存，打开添加弹窗时可直接选
+      try {
+        const models = await fetchRemoteModels(row.id)
+        remoteModelsCache.value[row.id] = models
+      } catch { /* 拉取失败不影响测试结果 */ }
     } else {
       ElMessage.error(`连接失败：${result.errorMessage}`)
     }
   } finally {
     testingId.value = null
   }
+}
+
+// ── 模型管理 ───────────────────────────────────────────────
+const modelDialogVisible = ref(false)
+const currentProvider = ref<ProviderVO | null>(null)
+const modelList = ref<ModelConfig[]>([])
+// 当前 provider 的远程可选模型 ID 列表
+const remoteModelOptions = ref<string[]>([])
+const fetchingRemote = ref(false)
+
+const openModelDialog = async (row: ProviderVO) => {
+  currentProvider.value = row
+  modelDialogVisible.value = true
+  // 同时加载已配置模型 + 远程模型列表
+  try {
+    modelList.value = await listModels(row.id)
+  } catch {
+    ElMessage.error('加载模型列表失败')
+  }
+  // 从缓存或远程拉取可选模型
+  if (remoteModelsCache.value[row.id]) {
+    remoteModelOptions.value = remoteModelsCache.value[row.id]
+  } else {
+    fetchingRemote.value = true
+    try {
+      const models = await fetchRemoteModels(row.id)
+      remoteModelsCache.value[row.id] = models
+      remoteModelOptions.value = models
+    } catch {
+      remoteModelOptions.value = []
+    } finally {
+      fetchingRemote.value = false
+    }
+  }
+}
+
+// 模型表单
+const modelFormVisible = ref(false)
+const modelFormMode = ref<'add' | 'edit'>('add')
+const modelSubmitting = ref(false)
+const modelFormRef = ref<FormInstance>()
+const editingModelId = ref<number | null>(null)
+
+const defaultModelForm = () => ({ name: '', modelId: '', contextSize: 4096, enabled: 1 })
+const modelForm = ref(defaultModelForm())
+
+const modelFormRules: FormRules = {
+  name:    [{ required: true, message: '请输入模型名称', trigger: 'blur' }],
+  modelId: [{ required: true, message: '请输入模型 ID', trigger: 'blur' }],
+}
+
+/** 从远程列表选中一个模型 ID，自动填入表单 */
+const onRemoteModelSelect = (modelId: string) => {
+  modelForm.value.modelId = modelId
+  // 如果名称还是空的，顺便填上
+  if (!modelForm.value.name) {
+    modelForm.value.name = modelId
+  }
+}
+
+const resetModelForm = () => {
+  modelForm.value = defaultModelForm()
+  editingModelId.value = null
+  modelFormRef.value?.clearValidate()
+}
+
+const openAddModel = () => {
+  modelFormMode.value = 'add'
+  modelFormVisible.value = true
+}
+
+const openEditModel = (row: ModelConfig) => {
+  modelFormMode.value = 'edit'
+  editingModelId.value = row.id
+  modelForm.value = {
+    name: row.name,
+    modelId: row.modelId,
+    contextSize: row.contextSize ?? 4096,
+    enabled: row.enabled ?? 1,
+  }
+  modelFormVisible.value = true
+}
+
+const onModelSubmit = async () => {
+  await modelFormRef.value?.validate()
+  if (!currentProvider.value) return
+  modelSubmitting.value = true
+  try {
+    if (modelFormMode.value === 'add') {
+      const created = await addModel(currentProvider.value.id, {
+        name: modelForm.value.name,
+        modelId: modelForm.value.modelId,
+        contextSize: modelForm.value.contextSize,
+      })
+      modelList.value.push(created)
+      notifySuccess('添加成功')
+    } else {
+      const updated = await updateModel(currentProvider.value.id, editingModelId.value!, {
+        name: modelForm.value.name,
+        modelId: modelForm.value.modelId,
+        contextSize: modelForm.value.contextSize,
+        enabled: modelForm.value.enabled,
+      })
+      const idx = modelList.value.findIndex(m => m.id === editingModelId.value)
+      if (idx !== -1) modelList.value[idx] = updated
+      notifySuccess('保存成功')
+    }
+    modelFormVisible.value = false
+    tableRef.value?.refresh()
+  } finally {
+    modelSubmitting.value = false
+  }
+}
+
+const onDeleteModel = async (row: ModelConfig) => {
+  if (!currentProvider.value) return
+  await confirm(
+    `确定删除模型「${row.name}」吗？`,
+    async () => {
+      await deleteModel(currentProvider.value!.id, row.id)
+      modelList.value = modelList.value.filter(m => m.id !== row.id)
+    },
+    '删除成功'
+  )
+  tableRef.value?.refresh()
 }
 </script>
 

@@ -11,6 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import okhttp3.OkHttpClient;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 @Slf4j
@@ -38,5 +39,15 @@ public class ProviderConnectionTestService {
     public ConnectionTestResult test(Provider provider) {
         log.info("连通性测试 provider={} type={}", provider.getName(), provider.getType());
         return adapterFactory.get(provider.getType()).testConnection(provider, testClient);
+    }
+
+    /** 从远程提供商拉取模型 ID 列表 */
+    public List<String> fetchRemoteModels(Long id) {
+        Provider provider = providerMapper.selectById(id);
+        if (provider == null) {
+            throw new BizException(ErrorCode.PROVIDER_NOT_FOUND);
+        }
+        log.info("拉取远程模型列表 provider={} type={}", provider.getName(), provider.getType());
+        return adapterFactory.get(provider.getType()).listModels(provider, testClient);
     }
 }

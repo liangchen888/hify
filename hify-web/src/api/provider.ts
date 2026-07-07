@@ -14,6 +14,7 @@ export interface ModelConfig {
   id: number
   name: string
   modelId: string
+  contextSize: number
   enabled: number
 }
 
@@ -85,3 +86,34 @@ export const deleteProvider = (id: number) =>
 
 export const testConnection = (id: number) =>
   post<ConnectionTestResult>(`/v1/providers/${id}/test-connection`, {})
+
+/** 从远程拉取模型 ID 列表 */
+export const fetchRemoteModels = (id: number) =>
+  get<string[]>(`/v1/providers/${id}/fetch-models`)
+
+// ── 模型配置 CRUD ──────────────────────────────────────────
+
+export interface ModelConfigCreateDTO {
+  name: string
+  modelId: string
+  contextSize?: number
+}
+
+export interface ModelConfigUpdateDTO {
+  name: string
+  modelId: string
+  contextSize?: number
+  enabled?: number
+}
+
+export const listModels = (providerId: number) =>
+  get<ModelConfig[]>(`/v1/providers/${providerId}/models`)
+
+export const addModel = (providerId: number, data: ModelConfigCreateDTO) =>
+  post<ModelConfig>(`/v1/providers/${providerId}/models`, data)
+
+export const updateModel = (providerId: number, modelId: number, data: ModelConfigUpdateDTO) =>
+  put<ModelConfig>(`/v1/providers/${providerId}/models/${modelId}`, data)
+
+export const deleteModel = (providerId: number, modelId: number) =>
+  del<void>(`/v1/providers/${providerId}/models/${modelId}`)

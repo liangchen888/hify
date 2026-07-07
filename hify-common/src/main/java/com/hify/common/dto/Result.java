@@ -1,5 +1,7 @@
 package com.hify.common.dto;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Getter;
 
 @Getter
@@ -9,7 +11,10 @@ public class Result<T> {
     private final String message;
     private final T data;
 
-    protected Result(int code, String message, T data) {
+    @JsonCreator
+    protected Result(@JsonProperty("code") int code,
+                     @JsonProperty("message") String message,
+                     @JsonProperty("data") T data) {
         this.code = code;
         this.message = message;
         this.data = data;

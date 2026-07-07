@@ -1,5 +1,7 @@
 package com.hify.common.dto;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Getter;
 
 import java.util.List;
@@ -12,7 +14,11 @@ public class PageResult<T> {
     private final int page;
     private final int pageSize;
 
-    private PageResult(List<T> list, long total, int page, int pageSize) {
+    @JsonCreator
+    private PageResult(@JsonProperty("list") List<T> list,
+                       @JsonProperty("total") long total,
+                       @JsonProperty("page") int page,
+                       @JsonProperty("pageSize") int pageSize) {
         this.list = list;
         this.total = total;
         this.page = page;

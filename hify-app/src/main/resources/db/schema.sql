@@ -75,6 +75,125 @@ CREATE TABLE IF NOT EXISTS mcp_server (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='MCP 工具服务';
 
 -- ─────────────────────────────────────────────
+-- 知识库
+-- ─────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS knowledge_base (
+    id          BIGINT          NOT NULL AUTO_INCREMENT COMMENT '主键',
+    name        VARCHAR(100)    NOT NULL                COMMENT '知识库名称',
+    description VARCHAR(500)    DEFAULT ''              COMMENT '描述',
+    enabled     TINYINT(1)      NOT NULL DEFAULT 1      COMMENT '是否启用',
+    deleted     TINYINT(1)      NOT NULL DEFAULT 0      COMMENT '逻辑删除',
+    created_at  DATETIME        NOT NULL                COMMENT '创建时间',
+    updated_at  DATETIME        NOT NULL                COMMENT '更新时间',
+    PRIMARY KEY (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='知识库';
+
+-- ─────────────────────────────────────────────
+-- 知识库文档
+-- ─────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS document (
+    id                BIGINT          NOT NULL AUTO_INCREMENT COMMENT '主键',
+    knowledge_base_id BIGINT          NOT NULL                COMMENT '所属知识库 id',
+    name              VARCHAR(200)    NOT NULL                COMMENT '文件名',
+    file_type         VARCHAR(20)     NOT NULL                COMMENT '文件类型',
+    file_size         BIGINT          NOT NULL                COMMENT '文件大小（字节）',
+    status            VARCHAR(20)     NOT NULL DEFAULT 'PENDING' COMMENT '状态：PENDING / PROCESSING / DONE / FAILED',
+    error_message     VARCHAR(500)    DEFAULT ''              COMMENT '错误信息',
+    chunk_count       INT             NOT NULL DEFAULT 0      COMMENT '切片数量',
+    deleted           TINYINT(1)      NOT NULL DEFAULT 0      COMMENT '逻辑删除',
+    created_at        DATETIME        NOT NULL                COMMENT '创建时间',
+    updated_at        DATETIME        NOT NULL                COMMENT '更新时间',
+    PRIMARY KEY (id),
+    KEY idx_document_knowledge_base_id (knowledge_base_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='知识库文档';
+
+-- ─────────────────────────────────────────────
+-- 工作流
+-- ─────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS workflow (
+    id          BIGINT          NOT NULL AUTO_INCREMENT COMMENT '主键',
+    name        VARCHAR(100)    NOT NULL                COMMENT '工作流名称',
+    description VARCHAR(500)    DEFAULT ''              COMMENT '描述',
+    status      VARCHAR(20)     NOT NULL DEFAULT 'DRAFT' COMMENT '状态：DRAFT / PUBLISHED / DISABLED',
+    deleted     TINYINT(1)      NOT NULL DEFAULT 0      COMMENT '逻辑删除',
+    created_at  DATETIME        NOT NULL                COMMENT '创建时间',
+    updated_at  DATETIME        NOT NULL                COMMENT '更新时间',
+    PRIMARY KEY (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='工作流';
+
+-- ─────────────────────────────────────────────
+-- 工作流节点
+-- ─────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS workflow_node (
+    id          BIGINT          NOT NULL AUTO_INCREMENT COMMENT '主键',
+    workflow_id BIGINT          NOT NULL                COMMENT '所属工作流 id',
+    node_key    VARCHAR(100)    NOT NULL                COMMENT '工作流内唯一标识',
+    type        VARCHAR(50)     NOT NULL                COMMENT '节点类型：LLM / CONDITION / API_CALL / KNOWLEDGE / START / END',
+    name        VARCHAR(100)    NOT NULL DEFAULT ''     COMMENT '节点名称',
+    config      JSON            DEFAULT (JSON_OBJECT()) COMMENT '节点配置（JSON）',
+    deleted     TINYINT(1)      NOT NULL DEFAULT 0      COMMENT '逻辑删除',
+    created_at  DATETIME        NOT NULL                COMMENT '创建时间',
+    updated_at  DATETIME        NOT NULL                COMMENT '更新时间',
+    PRIMARY KEY (id),
+    KEY idx_workflow_node_workflow_id (workflow_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='工作流节点';
+
+-- ─────────────────────────────────────────────
+-- 工作流边（连线）
+-- ─────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS workflow_edge (
+    id              BIGINT          NOT NULL AUTO_INCREMENT COMMENT '主键',
+    workflow_id     BIGINT          NOT NULL                COMMENT '所属工作流 id',
+    source_node_key VARCHAR(100)    NOT NULL                COMMENT '源节点 key',
+    target_node_key VARCHAR(100)    NOT NULL                COMMENT '目标节点 key',
+    condition_expr  VARCHAR(500)    DEFAULT NULL            COMMENT '条件表达式，NULL 表示无条件直接走',
+    deleted         TINYINT(1)      NOT NULL DEFAULT 0      COMMENT '逻辑删除',
+    created_at      DATETIME        NOT NULL                COMMENT '创建时间',
+    updated_at      DATETIME        NOT NULL                COMMENT '更新时间',
+    PRIMARY KEY (id),
+    KEY idx_workflow_edge_workflow_id (workflow_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='工作流边';
+
+-- ─────────────────────────────────────────────
+-- 工作流运行记录
+-- ─────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS workflow_run (
+    id          BIGINT          NOT NULL AUTO_INCREMENT COMMENT '主键',
+    workflow_id BIGINT          NOT NULL                COMMENT '所属工作流 id',
+    status      VARCHAR(20)     NOT NULL DEFAULT 'RUNNING' COMMENT '状态：RUNNING / SUCCESS / FAILED',
+    input       JSON                                    COMMENT '输入参数',
+    output      JSON                                    COMMENT '输出结果',
+    error       VARCHAR(500)                            COMMENT '错误信息',
+    elapsed_ms  INT                                     COMMENT '总耗时（ms）',
+    finished_at DATETIME                                COMMENT '完成时间',
+    deleted     TINYINT(1)      NOT NULL DEFAULT 0      COMMENT '逻辑删除',
+    created_at  DATETIME        NOT NULL                COMMENT '创建时间',
+    updated_at  DATETIME        NOT NULL                COMMENT '更新时间',
+    PRIMARY KEY (id),
+    KEY idx_workflow_run_workflow_id (workflow_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='工作流运行记录';
+
+-- ─────────────────────────────────────────────
+-- 工作流节点运行记录
+-- ─────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS workflow_node_run (
+    id              BIGINT          NOT NULL AUTO_INCREMENT COMMENT '主键',
+    workflow_run_id BIGINT          NOT NULL                COMMENT '所属运行记录 id',
+    node_key        VARCHAR(100)    NOT NULL                COMMENT '节点 key',
+    node_type       VARCHAR(50)     NOT NULL                COMMENT '节点类型',
+    status          VARCHAR(20)     NOT NULL DEFAULT 'RUNNING' COMMENT '状态：RUNNING / SUCCESS / FAILED',
+    outputs         JSON                                    COMMENT '节点输出快照',
+    error           VARCHAR(500)                           COMMENT '错误信息',
+    elapsed_ms      INT                                     COMMENT '耗时（ms）',
+    finished_at     DATETIME                                COMMENT '完成时间',
+    deleted         TINYINT(1)      NOT NULL DEFAULT 0      COMMENT '逻辑删除',
+    created_at      DATETIME        NOT NULL                COMMENT '创建时间',
+    updated_at      DATETIME        NOT NULL                COMMENT '更新时间',
+    PRIMARY KEY (id),
+    KEY idx_workflow_node_run_run_id (workflow_run_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='工作流节点运行记录';
+
+-- ─────────────────────────────────────────────
 -- Agent 配置
 -- ─────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS agent (
@@ -87,6 +206,8 @@ CREATE TABLE IF NOT EXISTS agent (
     max_tokens        INT             NOT NULL DEFAULT 2048   COMMENT '最大输出 token 数',
     max_context_turns INT             NOT NULL DEFAULT 10     COMMENT '保留最近几轮上下文',
     enabled           TINYINT(1)      NOT NULL DEFAULT 1      COMMENT '是否启用',
+    knowledge_base_id BIGINT          DEFAULT NULL            COMMENT '绑定的知识库 id',
+    workflow_id       BIGINT          DEFAULT NULL            COMMENT '绑定的工作流 id',
     deleted           TINYINT(1)      NOT NULL DEFAULT 0      COMMENT '逻辑删除',
     created_at        DATETIME        NOT NULL                COMMENT '创建时间',
     updated_at        DATETIME        NOT NULL                COMMENT '更新时间',

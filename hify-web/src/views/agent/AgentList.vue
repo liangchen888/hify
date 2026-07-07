@@ -182,8 +182,9 @@ import {
   getModelOptions,
 } from '@/api/agent'
 import type { AgentListItem, ModelOption } from '@/api/agent'
+import { getMcpServerList } from '@/api/mcp'
 
-// ── MCP Server 类型（暂无后端接口，用空列表占位）────────────────
+// ── MCP Server ────────────────────────────────────────────
 interface McpServer { id: number; name: string; endpoint: string }
 const mcpServers = ref<McpServer[]>([])
 
@@ -209,6 +210,11 @@ const modelNameMap = computed(() => {
 onMounted(async () => {
   modelsLoading.value = true
   try { modelOptions.value = await getModelOptions() } finally { modelsLoading.value = false }
+  // 加载 MCP Server 列表
+  try {
+    const res = await getMcpServerList({ page: 1, pageSize: 100, enabled: 1 })
+    mcpServers.value = res.list.map(s => ({ id: s.id, name: s.name, endpoint: s.endpoint }))
+  } catch { /* 加载失败时保持空列表，不影响其他功能 */ }
 })
 
 // ── 表格 ───────────────────────────────────────────────────

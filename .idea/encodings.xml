@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="Encoding">
+    <file url="file://$PROJECT_DIR$/hify-agent/src/main/java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/hify-agent/src/main/resources" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/hify-app/src/main/java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/hify-app/src/main/resources" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/hify-chat/src/main/java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/hify-chat/src/main/resources" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/hify-common/src/main/java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/hify-common/src/main/resources" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/hify-knowledge/src/main/java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/hify-knowledge/src/main/resources" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/hify-mcp/src/main/java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/hify-mcp/src/main/resources" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/hify-provider/src/main/java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/hify-provider/src/main/resources" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/hify-workflow/src/main/java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/hify-workflow/src/main/resources" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/main/java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/src/main/resources" charset="UTF-8" />
+  </component>
+</project>

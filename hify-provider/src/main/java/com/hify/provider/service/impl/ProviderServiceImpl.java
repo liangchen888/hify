@@ -6,13 +6,14 @@ import com.hify.common.dto.PageResult;
 import com.hify.common.dto.Result;
 import com.hify.common.exception.BizException;
 import com.hify.common.exception.ErrorCode;
+import com.hify.provider.dto.ModelConfigCreateRequest;
+import com.hify.provider.dto.ModelConfigUpdateRequest;
 import com.hify.provider.dto.ProviderCreateRequest;
 import com.hify.provider.dto.ProviderDetailResponse;
 import com.hify.provider.dto.ProviderQueryRequest;
 import com.hify.provider.dto.ProviderUpdateRequest;
 import com.hify.provider.entity.ModelConfig;
 import com.hify.provider.entity.Provider;
-import com.hify.provider.service.ProviderService;
 import com.hify.provider.entity.ProviderHealth;
 import com.hify.provider.mapper.ModelConfigMapper;
 import com.hify.provider.mapper.ProviderHealthMapper;
@@ -143,6 +144,66 @@ public class ProviderServiceImpl implements ProviderService {
             throw new BizException(ErrorCode.MODEL_CONFIG_DISABLED);
         }
         return mc;
+    }
+
+    // ── 模型配置 CRUD ──────────────────────────────────────
+
+    @Override
+    public List<ModelConfig> listModels(Long providerId) {
+        getOrThrow(providerId);
+        return modelConfigMapper.selectList(
+            new LambdaQueryWrapper<ModelConfig>()
+                .eq(ModelConfig::getProviderId, providerId)
+                .orderByAsc(ModelConfig::getCreatedAt)
+        );
+    }
+
+    @Override
+    @Caching(evict = {
+        @CacheEvict(cacheNames = "provider-cache", key = "#providerId"),
+        @CacheEvict(cacheNames = "provider-cache", key = "'list'")
+    })
+    public ModelConfig addModel(Long providerId, ModelConfigCreateRequest request) {
+        getOrThrow(providerId);
+        ModelConfig mc = new ModelConfig();
+        mc.setProviderId(providerId);
+        mc.setName(request.getName());
+        mc.setModelId(request.getModelId());
+        mc.setContextSize(request.getContextSize() != null ? request.getContextSize() : 4096);
+        mc.setEnabled(1);
+        modelConfigMapper.insert(mc);
+        return mc;
+    }
+
+    @Override
+    @Caching(evict = {
+        @CacheEvict(cacheNames = "provider-cache", key = "#providerId"),
+        @CacheEvict(cacheNames = "provider-cache", key = "'list'")
+    })
+    public ModelConfig updateModel(Long providerId, Long modelId, ModelConfigUpdateRequest request) {
+        ModelConfig mc = modelConfigMapper.selectById(modelId);
+        if (mc == null || !mc.getProviderId().equals(providerId)) {
+            throw new BizException(ErrorCode.MODEL_CONFIG_NOT_FOUND);
+        }
+        mc.setName(request.getName());
+        mc.setModelId(request.getModelId());
+        if (request.getContextSize() != null) mc.setContextSize(request.getContextSize());
+        if (request.getEnabled() != null) mc.setEnabled(request.getEnabled());
+        modelConfigMapper.updateById(mc);
+        return mc;
+    }
+
+    @Override
+    @Caching(evict = {
+        @CacheEvict(cacheNames = "provider-cache", key = "#providerId"),
+        @CacheEvict(cacheNames = "provider-cache", key = "'list'")
+    })
+    public void deleteModel(Long providerId, Long modelId) {
+        ModelConfig mc = modelConfigMapper.selectById(modelId);
+        if (mc == null || !mc.getProviderId().equals(providerId)) {
+            throw new BizException(ErrorCode.MODEL_CONFIG_NOT_FOUND);
+        }
+        modelConfigMapper.deleteById(modelId);
     }
 
     // ── 内部工具 ───────────────────────────────────────────────

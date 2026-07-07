@@ -71,7 +71,16 @@ public class LlmHttpClient {
         try (Response response = streamClient.newCall(request).execute()) {
             log.info("LLM STREAM {} status={}", url, response.code());
 
-            checkStatus(response.code(), url);
+            if (!response.isSuccessful()) {
+                ResponseBody errBody = response.body();
+                String errMsg = errBody != null ? errBody.string() : "(empty body)";
+                String authHeader = request.header("Authorization");
+                String authPrefix = authHeader != null && authHeader.length() > 15
+                        ? authHeader.substring(0, 15) + "..." : authHeader;
+                log.error("LLM STREAM {} failed status={} auth_prefix={} body={}",
+                        url, response.code(), authPrefix, errMsg);
+                checkStatus(response.code(), url);
+            }
 
             ResponseBody responseBody = response.body();
             if (responseBody == null) {

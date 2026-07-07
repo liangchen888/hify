@@ -2,25 +2,21 @@ package com.hify.mcp.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hify.common.dto.PageResult;
 import com.hify.common.dto.Result;
 import com.hify.common.exception.BizException;
 import com.hify.common.exception.ErrorCode;
+import com.hify.mcp.client.DirectMcpClient;
 import com.hify.mcp.dto.*;
 import com.hify.mcp.entity.McpServer;
 import com.hify.mcp.mapper.McpServerMapper;
 import com.hify.mcp.service.McpService;
-import io.modelcontextprotocol.client.McpClient;
-import io.modelcontextprotocol.client.McpSyncClient;
-import io.modelcontextprotocol.client.transport.HttpClientSseClientTransport;
-import io.modelcontextprotocol.spec.McpSchema;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
-import java.time.Duration;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -29,6 +25,7 @@ import java.util.stream.Collectors;
 public class McpServiceImpl implements McpService {
 
     private final McpServerMapper mcpServerMapper;
+    private final ObjectMapper objectMapper;
 
     // ── CRUD ────────────────────────────────────────────────────
 
@@ -85,12 +82,15 @@ public class McpServiceImpl implements McpService {
         McpServer server = getOrThrow(id);
         long start = System.currentTimeMillis();
         try {
+            log.info("MCP 连通测试开始: server={}, endpoint={}", server.getName(), server.getEndpoint());
             List<String> tools = listToolsFromEndpoint(server.getEndpoint());
             int latencyMs = (int) (System.currentTimeMillis() - start);
-            log.info("MCP 连通测试成功 server={} tools={} latency={}ms", server.getName(), tools.size(), latencyMs);
+            log.info("MCP 连通测试成功: server={}, tools={}, latency={}ms", server.getName(), tools.size(), latencyMs);
             return McpTestResult.ok(latencyMs, tools);
         } catch (Exception e) {
-            log.warn("MCP 连通测试失败 server={}: {}", server.getName(), e.getMessage());
+            int latencyMs = (int) (System.currentTimeMillis() - start);
+            log.warn("MCP 连通测试失败: server={}, endpoint={}, error={}, latency={}ms",
+                    server.getName(), server.getEndpoint(), e.getMessage(), latencyMs);
             return McpTestResult.fail(e.getMessage());
         }
     }
@@ -101,21 +101,9 @@ public class McpServiceImpl implements McpService {
     public String callTool(Long mcpServerId, String toolName, Map<String, Object> arguments) {
         McpServer server = getOrThrow(mcpServerId);
         log.info("MCP callTool server={} tool={} args={}", server.getName(), toolName, arguments);
-
-        var transport = HttpClientSseClientTransport.builder(server.getEndpoint()).build();
-        try (McpSyncClient client = McpClient.sync(transport)
-                .requestTimeout(Duration.ofSeconds(30))
-                .build()) {
-
+        try (DirectMcpClient client = new DirectMcpClient(server.getEndpoint())) {
             client.initialize();
-            McpSchema.CallToolResult result = client.callTool(
-                    new McpSchema.CallToolRequest(toolName, arguments));
-
-            return result.content().stream()
-                    .filter(c -> c instanceof McpSchema.TextContent)
-                    .map(c -> ((McpSchema.TextContent) c).text())
-                    .collect(Collectors.joining("\n"));
-
+            return client.callTool(toolName, arguments);
         } catch (Exception e) {
             log.error("MCP callTool failed server={} tool={}: {}", server.getName(), toolName, e.getMessage());
             throw new BizException(ErrorCode.MCP_TOOL_CALL_FAILED, "工具调用失败: " + e.getMessage());
@@ -128,32 +116,47 @@ public class McpServiceImpl implements McpService {
         return listToolsFromEndpoint(server.getEndpoint());
     }
 
-    // ── 内部工具 ─────────────────────────────────────────────────
+    // ── 工具详情 ─────────────────────────────────────────────────
 
     @Override
     public List<McpToolDetail> listToolsDetail(Long mcpServerId) {
         McpServer server = getOrThrow(mcpServerId);
-        var transport = HttpClientSseClientTransport.builder(server.getEndpoint()).build();
-        try (McpSyncClient client = McpClient.sync(transport)
-                .requestTimeout(Duration.ofSeconds(5))
-                .build()) {
+        try (DirectMcpClient client = new DirectMcpClient(server.getEndpoint())) {
             client.initialize();
-            return client.listTools().tools().stream()
-                    .map(this::toToolDetail)
-                    .collect(Collectors.toList());
+            List<Map<String, Object>> details = client.listToolDetails();
+            return details.stream().map(d -> {
+                McpToolDetail td = new McpToolDetail();
+                td.setName((String) d.get("name"));
+                td.setDescription((String) d.getOrDefault("description", ""));
+                if (d.containsKey("inputSchema")) {
+                    try {
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> schema = objectMapper.convertValue(d.get("inputSchema"), Map.class);
+                        td.setInputSchema(schema);
+                        Object required = schema.get("required");
+                        if (required instanceof List) {
+                            @SuppressWarnings("unchecked")
+                            List<String> req = (List<String>) required;
+                            td.setRequiredParams(req);
+                        }
+                    } catch (Exception ignored) {}
+                }
+                return td;
+            }).collect(Collectors.toList());
         } catch (Exception e) {
             log.warn("MCP listToolsDetail failed server={}: {}", server.getName(), e.getMessage());
-            // 连不上时返回空列表，不抛异常，由前端决定如何提示
-            return java.util.Collections.emptyList();
+            return Collections.emptyList();
         }
     }
+
+    // ── 调试调用 ─────────────────────────────────────────────────
 
     @Override
     public McpDebugResult debugTool(Long mcpServerId, McpDebugRequest request) {
         long start = System.currentTimeMillis();
         try {
             String result = callTool(mcpServerId, request.getToolName(),
-                    request.getArguments() != null ? request.getArguments() : java.util.Collections.emptyMap());
+                    request.getArguments() != null ? request.getArguments() : Collections.emptyMap());
             int elapsedMs = (int) (System.currentTimeMillis() - start);
             return McpDebugResult.ok(result, elapsedMs);
         } catch (BizException e) {
@@ -165,36 +168,12 @@ public class McpServiceImpl implements McpService {
         }
     }
 
-    @SuppressWarnings("unchecked")
-    private McpToolDetail toToolDetail(McpSchema.Tool tool) {
-        McpToolDetail detail = new McpToolDetail();
-        detail.setName(tool.name());
-        detail.setDescription(tool.description());
-        // inputSchema is McpSchema.JsonSchema — convert to Map via its properties
-        if (tool.inputSchema() != null) {
-            java.util.LinkedHashMap<String, Object> schema = new java.util.LinkedHashMap<>();
-            schema.put("type", "object");
-            if (tool.inputSchema().properties() != null) {
-                schema.put("properties", tool.inputSchema().properties());
-            }
-            if (tool.inputSchema().required() != null) {
-                schema.put("required", tool.inputSchema().required());
-                detail.setRequiredParams(tool.inputSchema().required());
-            }
-            detail.setInputSchema(schema);
-        }
-        return detail;
-    }
+    // ── 私有工具 ─────────────────────────────────────────────────
 
     private List<String> listToolsFromEndpoint(String endpoint) {
-        var transport = HttpClientSseClientTransport.builder(endpoint).build();
-        try (McpSyncClient client = McpClient.sync(transport)
-                .requestTimeout(Duration.ofSeconds(5))
-                .build()) {
+        try (DirectMcpClient client = new DirectMcpClient(endpoint)) {
             client.initialize();
-            return client.listTools().tools().stream()
-                    .map(McpSchema.Tool::name)
-                    .collect(Collectors.toList());
+            return client.listToolNames();
         } catch (Exception e) {
             throw new RuntimeException("无法连接 MCP Server: " + e.getMessage(), e);
         }

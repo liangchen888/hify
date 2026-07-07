@@ -322,6 +322,7 @@ public class ChatServiceImpl implements ChatService {
                     .messages(messages)
                     .temperature(agent.getTemperature())
                     .maxTokens(agent.getMaxTokens())
+                    .tools(toolSchemas.isEmpty() ? null : toolSchemas)  // 第二轮也要带工具定义
                     .build();
 
             log.info("action=llm_call_start sessionId={} agentId={} providerId={} modelName={} round=2",
@@ -463,16 +464,27 @@ public class ChatServiceImpl implements ChatService {
         String key = contextKey(sessionId);
         // Try Redis first
         if (redisUtil.isPresent()) {
-            Optional<List<Map<String, String>>> cached = redisUtil.get().get(key);
-            if (cached.isPresent()) {
-                return cached.get();
+            try {
+                Optional<List<Map<String, String>>> cached = redisUtil.get().get(key);
+                if (cached.isPresent()) {
+                    return cached.get();
+                }
+            } catch (Exception e) {
+                // 旧版序列化格式不兼容，清掉重建
+                log.warn("action=context_cache_miss sessionId={} reason=deserialization_error, rebuilding", sessionId);
+                redisUtil.get().delete(key);
             }
         }
         // Fall back to MySQL
         List<ChatMessage> dbMsgs = messageMapper.selectRecentBySessionId(sessionId, maxMsgs);
         List<Map<String, String>> ctx = dbMsgs.stream()
-                .map(m -> Map.of("role", m.getRole(), "content", m.getContent()))
-                .collect(Collectors.toList());
+                .map(m -> {
+                    Map<String, String> entry = new java.util.HashMap<>();
+                    entry.put("role", m.getRole());
+                    entry.put("content", m.getContent());
+                    return entry;
+                })
+                .collect(Collectors.toCollection(ArrayList::new));
         // Write back to Redis
         redisUtil.ifPresent(r -> r.set(key, ctx, SESSION_TTL));
         return ctx;
@@ -481,14 +493,29 @@ public class ChatServiceImpl implements ChatService {
     private void updateContext(Long sessionId, String userContent, String assistantContent, int maxMsgs) {
         String key = contextKey(sessionId);
         redisUtil.ifPresent(r -> {
-            @SuppressWarnings("unchecked")
-            List<Map<String, String>> ctx = r.<List<Map<String, String>>>get(key).orElseGet(ArrayList::new);
+            List<Map<String, String>> ctx;
+            try {
+                ctx = r.<List<Map<String, String>>>get(key).orElseGet(ArrayList::new);
+            } catch (Exception e) {
+                log.warn("action=context_cache_miss sessionId={} reason=deserialization_error, rebuilding", sessionId);
+                r.delete(key);
+                ctx = new ArrayList<>();
+            }
+            // 用 ArrayList + HashMap 确保可序列化，避免 SubList / UnmodifiableMap
             ctx = new ArrayList<>(ctx);
-            ctx.add(Map.of("role", "user", "content", userContent));
-            ctx.add(Map.of("role", "assistant", "content", assistantContent != null ? assistantContent : ""));
-            // Trim to rolling window
+            Map<String, String> userMsg = new java.util.HashMap<>();
+            userMsg.put("role", "user");
+            userMsg.put("content", userContent);
+            ctx.add(userMsg);
+
+            Map<String, String> assistantMsg = new java.util.HashMap<>();
+            assistantMsg.put("role", "assistant");
+            assistantMsg.put("content", assistantContent != null ? assistantContent : "");
+            ctx.add(assistantMsg);
+
+            // Trim to rolling window — 用 new ArrayList 而非 subList，避免 SubList 序列化问题
             if (ctx.size() > maxMsgs) {
-                ctx = ctx.subList(ctx.size() - maxMsgs, ctx.size());
+                ctx = new ArrayList<>(ctx.subList(ctx.size() - maxMsgs, ctx.size()));
             }
             r.set(key, ctx, SESSION_TTL);
         });
@@ -564,48 +591,28 @@ public class ChatServiceImpl implements ChatService {
             McpServer server = mcpServerMapper.selectById(serverId);
             if (server == null || server.getEnabled() != 1) continue;
             try {
-                List<String> toolNames = mcpService.listTools(serverId);
-                if (toolNames.isEmpty()) {
-                    // 连不上时 fallback：使用 server 名称推断工具列表
-                    toolNames = buildFallbackToolNames(server.getName());
-                    log.info("[MCP] Server {} 无法连接，使用 fallback 工具列表: {}", server.getName(), toolNames);
+                // 使用真实工具详情（含 description 和 inputSchema）
+                List<com.hify.mcp.dto.McpToolDetail> toolDetails = mcpService.listToolsDetail(serverId);
+                if (toolDetails.isEmpty()) {
+                    log.warn("[MCP] Server {} 工具列表为空，跳过", server.getName());
+                    continue;
                 }
-                for (String toolName : toolNames) {
+                for (com.hify.mcp.dto.McpToolDetail detail : toolDetails) {
+                    Map<String, Object> parameters = detail.getInputSchema() != null
+                            ? detail.getInputSchema()
+                            : Map.of("type", "object", "properties", Map.of());
                     schemas.add(Map.of(
                             "type", "function",
                             "function", Map.of(
-                                    "name", toolName,
-                                    "description", buildToolDescription(toolName, server.getName()),
-                                    "parameters", Map.of(
-                                            "type", "object",
-                                            "properties", Map.of(
-                                                    "orderId", Map.of("type", "string", "description", "订单号"),
-                                                    "userId", Map.of("type", "string", "description", "用户ID")
-                                            )
-                                    )
+                                    "name", detail.getName(),
+                                    "description", detail.getDescription() != null ? detail.getDescription() : "",
+                                    "parameters", parameters
                             )
                     ));
                 }
+                log.info("[MCP] Server {} 加载了 {} 个工具", server.getName(), toolDetails.size());
             } catch (Exception e) {
                 log.warn("[MCP] 加载工具列表失败 serverId={}: {}", serverId, e.getMessage());
-                // fallback 工具列表
-                List<String> fallback = buildFallbackToolNames(server.getName());
-                for (String toolName : fallback) {
-                    schemas.add(Map.of(
-                            "type", "function",
-                            "function", Map.of(
-                                    "name", toolName,
-                                    "description", buildToolDescription(toolName, server.getName()),
-                                    "parameters", Map.of(
-                                            "type", "object",
-                                            "properties", Map.of(
-                                                    "orderId", Map.of("type", "string", "description", "订单号"),
-                                                    "userId", Map.of("type", "string", "description", "用户ID")
-                                            )
-                                    )
-                            )
-                    ));
-                }
             }
         }
         return schemas;
